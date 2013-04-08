@@ -1,100 +1,8 @@
 var express = require('express')
-  , passport = require('passport')
-  , LocalStrategy = require('passport-local').Strategy
-  , mongodb = require('mongodb')
-  , mongoose = require('mongoose')
-  , bcrypt = require('bcrypt')
-  , SALT_WORK_FACTOR = 10;
-  
-mongoose.connect('localhost', 'test');
 var MongoStore = require('connect-mongo')(express);
-var db = mongoose.connection;
-db.on('error', console.error.bind(console, 'connection error:'));
-db.once('open', function callback() {
-  console.log('Connected to DB');
-});
 
-// User Schema
-var userSchema = mongoose.Schema({
-  username: { type: String, required: true, unique: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true},
-});
-
-// Bcrypt middleware
-userSchema.pre('save', function(next) {
-  var user = this;
-
-  if(!user.isModified('password')) return next();
-
-  bcrypt.genSalt(SALT_WORK_FACTOR, function(err, salt) {
-    if(err) return next(err);
-
-    bcrypt.hash(user.password, salt, function(err, hash) {
-      if(err) return next(err);
-      user.password = hash;
-      next();
-    });
-  });
-});
-
-// Password verification
-userSchema.methods.comparePassword = function(candidatePassword, cb) {
-  bcrypt.compare(candidatePassword, this.password, function(err, isMatch) {
-    if(err) return cb(err);
-    cb(null, isMatch);
-  });
-};
-
-// Seed a user
-var User = mongoose.model('User', userSchema);
-var user = new User({ username: 'anson', email: 'anson@example.com', password: '123' });
-user.save(function(err) {
-  if(err) {
-    console.log(err);
-  } else {
-    console.log('user: ' + user.username + " saved.");
-  }
-});
-
-
-// Passport session setup.
-//   To support persistent login sessions, Passport needs to be able to
-//   serialize users into and deserialize users out of the session.  Typically,
-//   this will be as simple as storing the user ID when serializing, and finding
-//   the user by ID when deserializing.
-passport.serializeUser(function(user, done) {
-  done(null, user.id);
-});
-
-passport.deserializeUser(function(id, done) {
-  User.findById(id, function (err, user) {
-    done(err, user);
-  });
-});
-
-
-// Use the LocalStrategy within Passport.
-//   Strategies in passport require a `verify` function, which accept
-//   credentials (in this case, a username and password), and invoke a callback
-//   with a user object.  In the real world, this would query a database;
-//   however, in this example we are using a baked-in set of users.
-passport.use(new LocalStrategy(function(username, password, done) {
-  User.findOne({ username: username }, function(err, user) {
-    if (err) { return done(err); }
-    if (!user) { return done(null, false, { message: 'Unknown user ' + username }); }
-    user.comparePassword(password, function(err, isMatch) {
-      if (err) return done(err);
-      if(isMatch) {
-        return done(null, user);
-      } else {
-        return done(null, false, { message: 'Invalid password' });
-      }
-    });
-  });
-}));
-
-
+var authentication = require('./authentication.js')
+  
 var app = express();
 
 // configure Express
@@ -108,17 +16,16 @@ app.configure(function() {
   app.use(express.methodOverride());
   app.use(express.session({
       secret:'awesome unicorns',
-      maxAge: new Date(Date.now() + 3600000),
+      maxAge: new Date(Date.now() + 604800000), // 7 days
       store: new MongoStore(
-          {db:mongoose.connection.db},
+          {db:authentication.mongoose.connection.db},
           function(err){
               console.log(err || 'connect-mongodb setup ok');
           })
   }));
-  // Initialize Passport!  Also use passport.session() middleware, to support
-  // persistent login sessions (recommended).
-  app.use(passport.initialize());
-  app.use(passport.session());
+
+  app.use(authentication.passport.initialize());
+  app.use(authentication.passport.session());
   app.use(app.router);
   app.use(express.static(__dirname + '/../../public'));
 });
@@ -128,7 +35,7 @@ app.get('/', function(req, res){
   res.render('index', { user: req.user });
 });
 
-app.get('/account', ensureAuthenticated, function(req, res){
+app.get('/account', authentication.ensureAuthenticated, function(req, res){
   res.render('account', { user: req.user });
 });
 
@@ -162,14 +69,3 @@ app.get('/logout', function(req, res){
 app.listen(3000, function() {
   console.log('Express server listening on port 3000');
 });
-
-
-// Simple route middleware to ensure user is authenticated.
-//   Use this route middleware on any resource that needs to be protected.  If
-//   the request is authenticated (typically via a persistent login session),
-//   the request will proceed.  Otherwise, the user will be redirected to the
-//   login page.
-function ensureAuthenticated(req, res, next) {
-  if (req.isAuthenticated()) { return next(); }
-  res.redirect('/login')
-}
